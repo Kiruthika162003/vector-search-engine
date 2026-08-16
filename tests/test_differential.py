@@ -105,7 +105,7 @@ class TestTheRules:
         )
 
     def test_and_fires_on_an_unrelated_one(self):
-        found, corpus, probes, k = a_result()
+        _, corpus, probes, k = a_result()
         far = Neighbours(
             identifiers=torch.arange(k).expand(8, k).contiguous(),
             scores=torch.full((8, k), 1000.0),
