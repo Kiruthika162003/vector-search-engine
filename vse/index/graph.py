@@ -196,6 +196,44 @@ class GraphIndex(Index):
         live.sort()
         return [(sign * score, vertex) for score, vertex in live[:k]]
 
+    def visited(self, query: torch.Tensor, ef: int | None = None) -> torch.Tensor:
+        """Every vertex one query's walk actually touched, not just the ones it returned.
+
+        Needed by storage/disk.py, which counts pages rather than distances and therefore cares
+        about everything the traversal reached rather than about the result. Counting pages from
+        the returned identifiers instead would say a graph search touches ten vectors, which is
+        the sort of measurement that looks reasonable and is wrong by two orders of magnitude.
+        """
+        self._require_built()
+        width = self.ef if ef is None else ef
+        if width < 1:
+            raise ConfigError(f"a beam of {width} is not a beam")
+        sign = 1.0 if self.metric.smaller_is_closer else -1.0
+        graph = self.graph
+        start = self._entry_point
+        first = sign * float(distances(query, self._vectors[start : start + 1], self.metric))
+        seen = {start}
+        frontier: list[tuple[float, int]] = [(first, start)]
+        kept: list[tuple[float, int]] = [(-first, start)]
+        while frontier:
+            score, vertex = heapq.heappop(frontier)
+            if kept and score > -kept[0][0] and len(kept) >= width:
+                break
+            fresh = [other for other in graph.neighbours(vertex) if other not in seen]
+            if not fresh:
+                continue
+            seen.update(fresh)
+            index = torch.tensor(fresh, dtype=torch.long)
+            block = sign * distances(query, self._vectors[index], self.metric).flatten()
+            for position, other in enumerate(fresh):
+                value = float(block[position])
+                if len(kept) < width or value < -kept[0][0]:
+                    heapq.heappush(frontier, (value, other))
+                    heapq.heappush(kept, (-value, other))
+                    if len(kept) > width:
+                        heapq.heappop(kept)
+        return torch.tensor(sorted(seen), dtype=torch.long)
+
     def insert(self, vectors: torch.Tensor) -> list[int]:
         """Connect a new vector to what a search from the entry point finds.
 
