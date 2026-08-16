@@ -5,7 +5,7 @@ import math
 import pytest
 import torch
 
-from vse.errors import ConfigError, DataError
+from vse.errors import ConfigError, DataError, IndexStateError
 from vse.quantize.binary import (
     WORD_BITS,
     BinaryCodes,
@@ -381,8 +381,6 @@ class TestTheIndex:
         assert a_rerank_below_k_is_refused()
 
     def test_searching_before_building_is_refused(self):
-        from vse.errors import IndexStateError
-
         with pytest.raises(IndexStateError):
             BinaryIndex(64).search(torch.randn(1, 64), k=5)
 

@@ -34,6 +34,7 @@ from vse.eval.autotune import (
     tuning_the_hierarchy,
     tuning_to_the_target_exactly_misses_half_the_time,
 )
+from vse.index.graph import GraphIndex
 from vse.index.ivf import IVFIndex
 from vse.vectors.dataset import gaussian, held_out
 from vse.vectors.exact import search
@@ -294,8 +295,6 @@ class TestMechanics:
         assert index.probe == 7
 
     def test_set_beam_applies_to_the_index(self):
-        from vse.index.graph import GraphIndex
-
         index = GraphIndex(8, degree=8, ef=10)
         set_beam(index, 21)
         assert index.ef == 21
