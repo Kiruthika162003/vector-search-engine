@@ -242,6 +242,32 @@ def evaluate(
     )
 
 
+def evaluate_result(
+    index: Index,
+    corpus: torch.Tensor,
+    queries: torch.Tensor,
+    found: Neighbours,
+    stats: SearchStats,
+    truth: Neighbours | None = None,
+) -> Quality:
+    """Score a result that has already been produced.
+
+    The same three numbers as evaluate, for callers that ran the search themselves. A sweep over
+    a search time parameter has one index and several results, and making it go back through
+    evaluate would rebuild the index once per row for nothing.
+    """
+    exact = (
+        truth if truth is not None else search(queries, corpus, k=found.k, metric=index.metric)
+    )
+    return Quality(
+        index=index.name,
+        recall=identifier_overlap(exact, found),
+        gap=score_gap(queries, corpus, exact, found, index.metric),
+        stats=stats,
+        corpus_size=int(corpus.shape[0]),
+    )
+
+
 def evaluate_on(index: Index, corpus: Corpus, k: int = 10, queries: int = 64) -> Quality:
     """Build an index on a corpus with queries held out of it, and score it."""
     searched, probes = held_out(corpus, count=queries)
