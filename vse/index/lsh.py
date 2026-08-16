@@ -6,7 +6,7 @@ from collections.abc import Sequence
 import torch
 
 from vse.errors import BuildError, ConfigError, IndexStateError
-from vse.index.base import Index, Quality, SearchStats, evaluate
+from vse.index.base import Index, Quality, SearchStats, evaluate, top_up
 from vse.index.ivf import IVFIndex
 from vse.vectors.dataset import Corpus, clustered, gaussian, held_out
 from vse.vectors.exact import Neighbours
@@ -169,13 +169,25 @@ class LSHIndex(Index):
             stats.hop(self.tables)
             stats.charge(int(rows.numel()))
             stats.visit(int(rows.numel()))
-            if rows.numel() == 0:
-                continue
-            block = squared_l2(queries[row : row + 1], self._vectors[rows]).flatten()
-            keep = min(k, int(rows.numel()))
-            best = torch.topk(block, k=keep, largest=False)
-            identifiers[row, :keep] = rows[best.indices]
-            scores[row, :keep] = best.values
+            reached: list[tuple[float, int]] = []
+            if rows.numel():
+                block = squared_l2(queries[row : row + 1], self._vectors[rows]).flatten()
+                keep = min(k, int(rows.numel()))
+                best = torch.topk(block, k=keep, largest=False)
+                reached = list(
+                    zip(best.values.tolist(), rows[best.indices].tolist(), strict=True)
+                )
+            filled = top_up(
+                reached,
+                k,
+                queries[row : row + 1],
+                self._vectors,
+                self._live,
+                self.metric,
+            )
+            for slot, (score, other) in enumerate(filled):
+                identifiers[row, slot] = other
+                scores[row, slot] = score
         return Neighbours(identifiers=identifiers, scores=scores), stats
 
     def insert(self, vectors: torch.Tensor) -> list[int]:
@@ -470,11 +482,19 @@ def the_buckets_are_very_uneven(bits: int = 10, tables: int = 8) -> dict:
 def a_query_can_collide_with_nothing(bits: int = 20, tables: int = 2) -> dict:
     """The failure mode that has no analogue in the other structures.
 
-    An empty result. A long signature and few tables means a query can land in a bucket nobody
-    else is in, in every table, and the candidate set is then empty and the search returns
-    nothing at all. An inverted file always has a nearest partition and a graph always has an
-    entry point. This structure can genuinely have nothing to say, and the parameters that cause
-    it are exactly the ones that make it fast.
+    An empty candidate set. A long signature and few tables means a query can land in a bucket
+    nobody else is in, in every table, and the structure has nothing to say. An inverted file
+    always has a nearest partition and a graph always has an entry point. This one can genuinely
+    come up with nothing, and the parameters causing it are the ones that make it fast.
+
+    What the search returns in that case is not nothing, because the contract says k results.
+    Since verify/differential.py found this index filling the gap with identifier zero at score
+    zero, it now fills from live rows through index/base.py's top_up, and those are arbitrary
+    corpus vectors with honest distances. The recall that produces is chance: 0.0063 here, which
+    is ten arbitrary rows out of 1984 and reads as the noise floor it is.
+
+    Reporting chance rather than zero is the honest outcome. The structure found nothing and the
+    caller got a well formed answer that is worth nothing, which is exactly what happened.
     """
     corpus = Corpus(
         vectors=normalise(gaussian(count=2048, dimension=32).vectors),
@@ -496,6 +516,8 @@ def a_query_can_collide_with_nothing(bits: int = 20, tables: int = 2) -> dict:
         "of": int(probes.shape[0]),
         "share": round(empty / int(probes.shape[0]), 4),
         "recall": round(quality.recall, 4),
+        "chance": round(10 / int(searched.vectors.shape[0]), 4),
+        "recall_is_chance": quality.recall < 20 / int(searched.vectors.shape[0]),
     }
 
 

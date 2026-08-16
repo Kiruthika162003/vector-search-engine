@@ -166,8 +166,11 @@ class TestEmptyResults:
         result = a_query_can_collide_with_nothing()
         assert result["share"] == 1.0
 
-    def test_and_the_recall_is_zero(self):
-        assert a_query_can_collide_with_nothing()["recall"] == 0.0
+    def test_and_the_recall_is_chance(self):
+        assert a_query_can_collide_with_nothing()["recall_is_chance"]
+
+    def test_which_is_near_zero(self):
+        assert a_query_can_collide_with_nothing()["recall"] < 0.02
 
     def test_a_short_signature_does_not_do_this(self):
         assert a_query_can_collide_with_nothing(bits=6, tables=8)["share"] == 0.0

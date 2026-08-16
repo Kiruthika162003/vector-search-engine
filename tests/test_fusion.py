@@ -295,7 +295,7 @@ class TestDegenerateCases:
     def test_rankings_of_different_query_counts_are_refused(self):
         assert rankings_of_different_query_counts_are_refused()
 
-    def test_for_score_fusion_too(self):
+    def test_mismatched_queries_are_refused_for_score_fusion_too(self):
         left = a_ranking(queries=4)
         right = a_ranking(queries=2)
         with pytest.raises(DataError, match="cannot fuse with"):

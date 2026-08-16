@@ -8,7 +8,7 @@ import torch
 
 from vse.build.neighbours import Graph, components, exact_graph, prune, symmetrise
 from vse.errors import BuildError, ConfigError, IndexStateError
-from vse.index.base import Index, Quality, SearchStats, evaluate, evaluate_result
+from vse.index.base import Index, Quality, SearchStats, evaluate, evaluate_result, top_up
 from vse.index.ivf import IVFIndex
 from vse.vectors.dataset import Corpus, clustered, gaussian, held_out
 from vse.vectors.exact import Neighbours
@@ -147,7 +147,14 @@ class GraphIndex(Index):
         identifiers = torch.zeros(count, k, dtype=torch.long)
         scores = torch.zeros(count, k)
         for row in range(count):
-            found = self._walk(queries[row : row + 1], k, width, stats)
+            found = top_up(
+                self._walk(queries[row : row + 1], k, width, stats),
+                k,
+                queries[row : row + 1],
+                self._vectors,
+                self._live,
+                self.metric,
+            )
             for slot, (score, vertex) in enumerate(found):
                 identifiers[row, slot] = vertex
                 scores[row, slot] = score

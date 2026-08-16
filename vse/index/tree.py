@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 
 from vse.errors import BuildError, ConfigError, IndexStateError
-from vse.index.base import Index, Quality, SearchStats, evaluate
+from vse.index.base import Index, Quality, SearchStats, evaluate, top_up
 from vse.vectors.dataset import Corpus, clustered, gaussian, held_out, on_a_subspace
 from vse.vectors.exact import Neighbours
 from vse.vectors.metric import L2, Metric, squared_l2
@@ -161,10 +161,17 @@ class TreeIndex(Index):
         identifiers = torch.zeros(count, k, dtype=torch.long)
         scores = torch.zeros(count, k)
         for row in range(count):
-            found = self._descend(queries[row : row + 1], k, stats)
+            found = top_up(
+                self._descend(queries[row : row + 1], k, stats),
+                k,
+                queries[row : row + 1],
+                self._vectors,
+                self._live,
+                self.metric,
+            )
             for slot, (score, other) in enumerate(found):
                 identifiers[row, slot] = other
-                scores[row, slot] = score
+                scores[row, slot] = score * score
         return Neighbours(identifiers=identifiers, scores=scores), stats
 
     def _descend(

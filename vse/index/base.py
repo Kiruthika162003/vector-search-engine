@@ -8,7 +8,7 @@ import torch
 
 from vse.errors import ConfigError, DataError, IndexStateError
 from vse.vectors.dataset import Corpus, gaussian, held_out
-from vse.vectors.exact import Neighbours, identifier_overlap, score_gap, search
+from vse.vectors.exact import Neighbours, distances, identifier_overlap, score_gap, search
 from vse.vectors.metric import L2, Metric, metric_named
 
 # What every index in this package has to be, and what it is measured in.
@@ -216,6 +216,53 @@ class Quality:
             "scanned": round(self.scanned, 5),
             "speedup": round(self.speedup, 2),
         }
+
+
+def top_up(
+    found: Sequence[tuple[float, int]],
+    k: int,
+    query: torch.Tensor,
+    corpus: torch.Tensor,
+    live: torch.Tensor,
+    metric: Metric | str = L2,
+) -> list[tuple[float, int]]:
+    """Fill a short result from rows the structure never reached.
+
+    An approximate structure can come back with fewer than k candidates, which happens when a
+    hash bucket is nearly empty or a walk is trapped in a small component. The contract says a
+    search returns exactly k, so the shortfall has to be filled with something, and the obvious
+    fillers are all wrong: repeating the last result breaks distinctness, leaving zeros claims
+    identifier zero is a neighbour at distance zero, and returning fewer rows breaks the shape
+    every caller is written against.
+
+    So the fill comes from live rows the result does not already contain, scored honestly and
+    sorted in with everything else. Those are real vectors with real distances, and if one of
+    them happens to be a true neighbour then the structure got lucky rather than being credited
+    with something it did not find. On a corpus of any size the chance of that is negligible and
+    the alternative is a result that lies about its own contents.
+
+    The differential sweep in verify/differential.py found three structures doing the zero fill
+    before this existed, and it was invisible to every recall measurement in the package.
+    """
+    if k < 1:
+        raise ConfigError(f"{k} is not a result width")
+    kept = list(found)[:k]
+    if len(kept) >= k:
+        return kept
+    taken = {identifier for _, identifier in kept}
+    available = torch.nonzero(live, as_tuple=False).flatten()
+    for candidate in available.tolist():
+        if len(kept) >= k:
+            break
+        if candidate in taken:
+            continue
+        score = float(distances(query, corpus[candidate : candidate + 1], metric))
+        kept.append((score, candidate))
+        taken.add(candidate)
+    if len(kept) < k:
+        raise ConfigError(f"a corpus of {int(available.numel())} cannot supply {k} neighbours")
+    kept.sort()
+    return kept
 
 
 def evaluate(
