@@ -271,8 +271,8 @@ class TestPlumbing:
     def test_every_command_is_reachable(self):
         assert every_command_is_reachable()["they_agree"]
 
-    def test_six_commands_exist(self):
-        assert len(every_command_is_reachable()["declared"]) == 6
+    def test_nine_commands_exist(self):
+        assert len(every_command_is_reachable()["declared"]) == 9
 
     def test_none_are_unreachable(self):
         assert every_command_is_reachable()["unreachable"] == []
