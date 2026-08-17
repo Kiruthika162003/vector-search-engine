@@ -396,7 +396,9 @@ def the_two_fixed_policies_bracket_everything() -> dict:
 
 
 def escalating_beats_a_random_fifth(share: float = 0.2) -> dict:
-    """Whether the signal is doing anything, which is the only test that separates a router
+    """Whether the signal is doing anything at all.
+
+    The only test that separates a router
     from a coin.
 
     Escalating a fifth of the traffic on the result spread against escalating a random fifth.

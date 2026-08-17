@@ -386,7 +386,9 @@ def the_gap_widens_with_the_page_size() -> dict:
 def a_narrow_vector_suffers_more_not_less(
     dimensions: Sequence[int] = (32, 128, 512),
 ) -> list[dict]:
-    """How the vector width interacts with the page size, which goes the way I expected only
+    """How the vector width interacts with the page size.
+
+    Which goes the way I expected only
     once the direction is stated carefully.
 
     A narrow vector packs more per page, so a scattered access reading one vector wastes more of

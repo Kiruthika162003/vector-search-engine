@@ -13,6 +13,7 @@ from vse.cli.main import (
     a_bad_corpus_is_reported_by_name,
     a_bad_setting_is_reported_as_one_line,
     a_missing_file_is_reported,
+    a_shortlist_target_outside_the_range_is_refused,
     a_structure_with_no_format_refuses_to_build,
     a_structure_with_no_knob_says_so,
     a_sweep_produces_a_curve,
@@ -20,6 +21,7 @@ from vse.cli.main import (
     a_zero_dimension_is_refused,
     an_outcome_reports_success,
     an_unknown_index_is_refused,
+    an_unreachable_shortlist_target_is_reported_not_raised,
     build_corpus,
     build_index,
     building_and_inspecting_round_trip,
@@ -30,9 +32,13 @@ from vse.cli.main import (
     main,
     measuring_one_index_works,
     parser,
+    the_drift_command_names_the_one_that_matters,
     the_error_names_what_is_available,
     the_json_output_parses,
     the_report_command_prints_its_precision,
+    the_shortlist_command_prices_against_a_scan,
+    the_stability_command_prints_both_noise_sources,
+    the_stability_table_carries_a_deviation_per_row,
     the_sweep_picks_the_right_knob,
     the_text_output_says_both_numbers,
     the_verify_command_fails_when_it_finds_something,
@@ -310,3 +316,85 @@ class TestPlumbing:
         for name in ("measure", "report", "sweep", "verify"):
             args = parser().parse_args([name] + (["--out", "x"] if name == "build" else []))
             assert hasattr(args, "json")
+
+
+class TestDrift:
+    def test_the_drift_command_runs(self):
+        assert the_drift_command_names_the_one_that_matters()["code"] == 0
+
+    def test_it_names_the_scaling(self):
+        assert the_drift_command_names_the_one_that_matters()["names_the_scaling"]
+
+    def test_and_the_repair(self):
+        assert the_drift_command_names_the_one_that_matters()["says_the_repair"]
+
+    def test_it_produces_json(self):
+        result = dispatch(["drift", "--json"])
+        assert len(json.loads(result.output)) == 3
+
+    def test_the_json_rows_carry_a_loss(self):
+        rows = json.loads(dispatch(["drift", "--json"]).output)
+        assert all("loss" in row for row in rows)
+
+    def test_the_worst_drift_leads(self):
+        rows = json.loads(dispatch(["drift", "--json"]).output)
+        assert rows[0]["loss"] == max(row["loss"] for row in rows)
+
+
+class TestStability:
+    def test_both_noise_sources_are_reported(self):
+        result = the_stability_command_prints_both_noise_sources()
+        assert result["has_the_seed_noise"] and result["has_the_query_noise"]
+
+    def test_they_come_out_level(self):
+        assert the_stability_command_prints_both_noise_sources()["they_are_level"]
+
+    def test_five_structures_are_measured(self):
+        assert the_stability_command_prints_both_noise_sources()["structures"] == 5
+
+    def test_every_row_carries_a_deviation(self):
+        assert the_stability_table_carries_a_deviation_per_row()["every_row_has_one"]
+
+    def test_the_deterministic_ones_report_zero(self):
+        assert the_stability_table_carries_a_deviation_per_row()["some_are_zero"]
+
+    def test_and_the_seeded_ones_do_not(self):
+        assert the_stability_table_carries_a_deviation_per_row()["some_are_not"]
+
+    def test_the_text_output_warns_about_small_gaps(self):
+        result = dispatch(["stability"])
+        assert "have not been measured" in result.output
+
+
+class TestShortlist:
+    def test_it_prices_against_a_scan(self):
+        assert the_shortlist_command_prices_against_a_scan()["mentions_a_scan"]
+
+    def test_and_reports_the_ratio(self):
+        assert the_shortlist_command_prices_against_a_scan()["mentions_the_ratio"]
+
+    def test_it_has_a_row_per_depth(self):
+        assert the_shortlist_command_prices_against_a_scan()["has_a_row_per_depth"]
+
+    def test_an_unreachable_target_is_reported(self):
+        assert an_unreachable_shortlist_target_is_reported_not_raised()["says_so"]
+
+    def test_and_still_exits_zero(self):
+        assert an_unreachable_shortlist_target_is_reported_not_raised()["still_succeeds"]
+
+    def test_a_target_above_one_is_refused(self):
+        assert a_shortlist_target_outside_the_range_is_refused()["refused"]
+
+    def test_and_the_refusal_names_the_target(self):
+        assert a_shortlist_target_outside_the_range_is_refused()["names_the_target"]
+
+    def test_a_target_of_nothing_is_refused(self):
+        assert dispatch(["shortlist", "--target", "0"]).code == 1
+
+    def test_it_produces_json(self):
+        row = json.loads(dispatch(["shortlist", "--json"]).output)
+        assert row["cheapest_depth"] == 1600
+
+    def test_the_json_carries_the_full_scan_cost(self):
+        row = json.loads(dispatch(["shortlist", "--json"]).output)
+        assert row["full_scan_cost"] > row["cheapest_cost"]

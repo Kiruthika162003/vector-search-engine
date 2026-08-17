@@ -12,6 +12,10 @@ import torch
 from vse.errors import ConfigError, VectorSearchError
 from vse.eval.report import every_structure, standard_corpora
 from vse.eval.report import run as run_report
+from vse.eval.stability import (
+    compare_the_structures,
+    the_seed_and_the_query_noise_are_the_same_size,
+)
 from vse.index.base import Index
 from vse.index.flat import FlatIndex
 from vse.index.forest import ForestIndex
@@ -22,17 +26,19 @@ from vse.index.lsh import LSHIndex
 from vse.index.tree import TreeIndex
 from vse.quantize.binary import BinaryIndex
 from vse.quantize.residual import ResidualIndex
+from vse.serve.rerank import how_deep_the_shortlist_must_be
 from vse.storage.persist import peek, save
 from vse.vectors.dataset import clustered, gaussian, on_a_subspace
+from vse.vectors.drift import compare_the_drifts
 from vse.vectors.exact import identifier_overlap, search
 from vse.verify.differential import sweep
 
 # A command line for the package, which exists so the measurements can be run without writing
 # Python and so a saved index can be inspected without loading it into a session.
 #
-# Six subcommands, all of them thin. Nothing here computes anything the library does not already
-# compute, and nothing here interprets a result: the report command prints the table and the
-# reader draws the conclusion. A command line that summarised its own output into a
+# Nine subcommands, all of them thin. Nothing here computes anything the library does not
+# already compute, and nothing here interprets a result: the report command prints the table and
+# the reader draws the conclusion. A command line that summarised its own output into a
 # recommendation would be doing the thing the report module is arranged to prevent.
 #
 # The design decisions worth stating are about failure. Every command returns an exit code, zero
@@ -161,6 +167,10 @@ def parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify", help="run the invariant checks")
     verify.add_argument("--dimension", type=int, default=16)
     verify.add_argument("--count", type=int, default=512)
+    commands.add_parser("drift", help="what a change in the queries costs")
+    commands.add_parser("stability", help="how much of a recall number is the seed")
+    shortlist = commands.add_parser("shortlist", help="size a two stage retrieval")
+    shortlist.add_argument("--target", type=float, default=0.9)
 
     for sub in commands.choices.values():
         sub.add_argument("--json", action="store_true", help="print machine readable output")
@@ -343,6 +353,104 @@ def verify(args) -> Outcome:
     return Outcome(0 if result.clean else 1, "\n".join(lines))
 
 
+def drift(args) -> Outcome:
+    """What each kind of query drift costs, at the worst setting the sweeps found.
+
+    Three drifts and one of them matters. The command prints all three because the two that do
+    not matter are the result: the usual worry about out of distribution queries is about a
+    shift away from the corpus, and that one is free.
+    """
+    rows = compare_the_drifts()
+    if args.json:
+        return Outcome(0, json.dumps(rows, indent=2))
+    lines = [
+        "query drift, each kind at the worst magnitude the sweeps reached",
+        "",
+        f"{'kind':<10}{'magnitude':>11}{'recall':>9}{'loss':>9}{'distances':>11}",
+    ]
+    for row in rows:
+        lines.append(
+            f"{row['kind']:<10}{row['magnitude']:>11}{row['recall']:>9.4f}"
+            f"{row['loss']:>+9.4f}{row['distances']:>11.1f}"
+        )
+    worst = rows[0]
+    lines.append("")
+    if worst["loss"] <= 0.0:
+        lines.append("no drift cost anything here")
+    else:
+        lines.append(
+            f"only {worst['kind']} costs anything, {worst['loss']:.4f}, and it is the drift "
+            "towards the dense middle of the corpus rather than away from it"
+        )
+        lines.append(
+            "the repair is more probes; a rebuild does not help, the corpus has not moved"
+        )
+    return Outcome(0, "\n".join(lines))
+
+
+def stability(args) -> Outcome:
+    """Every structure with its seed spread, which is how a comparison should be read.
+
+    The number to look at is the deviation next to the mean. Two structures whose means differ
+    by less than a few deviations have not been separated, and the report command's own standard
+    error is only half the story because it counts the queries and not the build.
+    """
+    rows = compare_the_structures()
+    against = the_seed_and_the_query_noise_are_the_same_size()
+    if args.json:
+        return Outcome(0, json.dumps({"structures": rows, "noise": against}, indent=2))
+    lines = [
+        f"eight seeds each, seed noise {against['from_the_seed']:.4f} and query noise "
+        f"{against['from_the_queries']:.4f}, so the floor under one number is about "
+        f"{against['combined']:.3f}",
+        "",
+        f"{'index':<10}{'mean':>9}{'deviation':>11}{'range':>9}{'distances':>11}",
+    ]
+    for row in rows:
+        lines.append(
+            f"{row['index']:<10}{row['mean']:>9.4f}{row['deviation']:>11.4f}"
+            f"{row['range']:>9.4f}{row['distances']:>11.1f}"
+        )
+    lines.append("")
+    lines.append(
+        f"differences below {4 * against['combined']:.2f} have not been measured, whatever "
+        "the means say"
+    )
+    return Outcome(0, "\n".join(lines))
+
+
+def shortlist(args) -> Outcome:
+    """The cheapest shortlist depth that clears a recall target, and what it costs.
+
+    Reported in distance equivalents against a full scan, because the interesting number in two
+    stage retrieval is the ratio and not the recall. A target that needs most of a scan to reach
+    is a target better served by scanning.
+    """
+    if not 0.0 < args.target <= 1.0:
+        raise ConfigError(f"{args.target} is not a recall target")
+    result = how_deep_the_shortlist_must_be(target=args.target)
+    if args.json:
+        return Outcome(0, json.dumps(result, indent=2))
+    lines = [
+        f"sign codes as a first stage, target {args.target}, "
+        f"a full scan costs {result['full_scan_cost']:.0f}",
+        "",
+        f"{'depth':>7}{'recall':>9}{'total':>10}",
+    ]
+    for row in result["rows"]:
+        lines.append(f"{row['depth']:>7}{row['recall']:>9.4f}{row['cost']:>10.1f}")
+    lines.append("")
+    if not result["a_target_is_reachable"]:
+        lines.append("no depth in the sweep reached the target")
+        return Outcome(0, "\n".join(lines))
+    saving = result["full_scan_cost"] / result["cheapest_cost"]
+    lines.append(
+        f"cheapest is a depth of {result['cheapest_depth']} at "
+        f"{result['cheapest_cost']:.0f}, which is {saving:.1f} times cheaper than a scan"
+    )
+    return Outcome(0, "\n".join(lines))
+
+
 COMMANDS = {
     "measure": measure,
     "report": report,
@@ -350,6 +458,9 @@ COMMANDS = {
     "build": build_and_save,
     "inspect": inspect,
     "verify": verify,
+    "drift": drift,
+    "stability": stability,
+    "shortlist": shortlist,
 }
 
 
@@ -705,6 +816,97 @@ def every_command_is_reachable() -> dict:
         "unreachable": sorted(set(COMMANDS) - declared),
         "undispatched": sorted(declared - set(COMMANDS)),
         "they_agree": declared == set(COMMANDS),
+    }
+
+
+def the_drift_command_names_the_one_that_matters() -> dict:
+    """That the drift table leads with the only drift that costs anything.
+
+    Sorted by loss rather than by magnitude, because the magnitudes are not comparable across
+    the three kinds and sorting by them would put the largest number first regardless of what it
+    did.
+    """
+    result = dispatch(["drift"])
+    return {
+        "code": result.code,
+        "first_line": result.output.split("\n")[0],
+        "names_the_scaling": "scale" in result.output,
+        "says_the_repair": "more probes" in result.output,
+    }
+
+
+def the_stability_command_prints_both_noise_sources() -> dict:
+    """That the seed spread is reported next to the query error rather than instead of it.
+
+    The report command prints only the query error, which is half the noise. A reader comparing
+    two structures needs both, and printing one alone is how a two point gap gets called a
+    result.
+    """
+    result = dispatch(["stability", "--json"])
+    row = json.loads(result.output)
+    return {
+        "code": result.code,
+        "structures": len(row["structures"]),
+        "has_the_seed_noise": "from_the_seed" in row["noise"],
+        "has_the_query_noise": "from_the_queries" in row["noise"],
+        "they_are_level": row["noise"]["they_are_level"],
+    }
+
+
+def the_stability_table_carries_a_deviation_per_row() -> dict:
+    """That every structure reports a spread, including the ones whose spread is zero.
+
+    The graph and the kd tree draw no random numbers, so their deviation is exactly zero and
+    omitting the column for them would hide the most useful fact about them.
+    """
+    result = dispatch(["stability", "--json"])
+    rows = json.loads(result.output)["structures"]
+    return {
+        "rows": len(rows),
+        "every_row_has_one": all("deviation" in row for row in rows),
+        "some_are_zero": any(row["deviation"] == 0.0 for row in rows),
+        "some_are_not": any(row["deviation"] > 0.0 for row in rows),
+    }
+
+
+def the_shortlist_command_prices_against_a_scan() -> dict:
+    """That the shortlist table reports the ratio to a full scan and not only the recall.
+
+    serve/rerank.py's result is that the saving is a factor of two at a target of 0.9, which is
+    much less than the framing of two stage retrieval suggests. A command printing recalls alone
+    would hide exactly that.
+    """
+    result = dispatch(["shortlist"])
+    return {
+        "code": result.code,
+        "mentions_a_scan": "full scan" in result.output,
+        "mentions_the_ratio": "times cheaper" in result.output,
+        "has_a_row_per_depth": len(result.output.split("\n")) > 6,
+    }
+
+
+def an_unreachable_shortlist_target_is_reported_not_raised() -> dict:
+    """That a target nothing reaches prints a line rather than failing.
+
+    An unreachable target is a fact about the corpus and the first stage, not a user error, so
+    the command says nothing reached it and exits zero. The caller wanted to know and now does.
+    """
+    result = dispatch(["shortlist", "--target", "0.999"])
+    return {
+        "code": result.code,
+        "says_so": "no depth in the sweep reached the target" in result.output,
+        "still_succeeds": result.code == 0,
+    }
+
+
+def a_shortlist_target_outside_the_range_is_refused() -> dict:
+    """That a target above one is a user error and is reported as one."""
+    result = dispatch(["shortlist", "--target", "1.5"])
+    return {
+        "code": result.code,
+        "error": result.error,
+        "refused": result.code == 1,
+        "names_the_target": "recall target" in result.error,
     }
 
 

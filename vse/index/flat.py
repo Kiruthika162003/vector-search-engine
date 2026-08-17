@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 import torch
 
-from vse.errors import ConfigError, IndexStateError
+from vse.errors import ConfigError, DataError, IndexStateError
 from vse.index.base import Index, Quality, SearchStats, evaluate, evaluate_on
 from vse.vectors.dataset import Corpus, gaussian, held_out
 from vse.vectors.exact import Neighbours
@@ -474,6 +474,6 @@ def a_query_of_the_wrong_width_is_refused() -> bool:
     index.build(gaussian(count=64, dimension=16).vectors)
     try:
         index.search(torch.randn(2, 8), k=1)
-    except Exception as error:
-        return "wide" in str(error)
+    except DataError:
+        return True
     return False
